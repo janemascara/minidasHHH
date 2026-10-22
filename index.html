@@ -58,6 +58,11 @@
   li > span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: rgba(238,240,255,.1);
     color: var(--ink); font: 700 13px/1 var(--body); }
   li b { color: var(--ink); font-weight: 700; }
+  .quality { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 15px; color: var(--dim); }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .seg button { appearance: none; border: 0; background: transparent; color: var(--ink); font: 700 15px/1 var(--body);
+    min-height: 40px; padding: 0 18px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--cyan); color: #04121a; }
   .hint { margin: 0; font-size: 14px; color: var(--dim); }
   .hint b { color: var(--ink); }
   #status { margin: 0; font-size: 14px; color: var(--warn); }
@@ -96,6 +101,11 @@
     <div id="bar" hidden><i></i></div>
     <p id="status" role="status"></p>
     <button id="retry" class="btn ghost" hidden>重试</button>
+    <div class="quality"><span>画质</span>
+      <div id="quality" class="seg" role="group" aria-label="画质">
+        <button type="button" data-q="smooth">流畅</button><button type="button" data-q="sharp">清晰</button>
+      </div>
+    </div>
     <p id="fsHint" class="hint" hidden>想要全屏玩：点 Safari 的 <b>分享</b> 按钮 &rarr; <b>添加到主屏幕</b>，以后从主屏幕的 Mini Dash 图标打开。</p>
 
     <h2>操作方法</h2>
@@ -430,7 +440,19 @@
   // shape is chosen once (landscape) and kept afterwards.
   var MIN_R = 1.3, MAX_R = 2.4, shape = null;
   // real pixels per CSS pixel; capped at 2 so 3x phones don't render 2.25x the pixels for no visible gain
-  var SHARP = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  // Sharp: up to 2 real pixels per CSS pixel. Smooth: 1, a quarter of the pixels to draw, the
+  // default for the Home Screen app, which fills the whole screen and runs slower on iPhone.
+  var QKEY = 'minidash.quality', quality = null, DPR = window.devicePixelRatio || 1;
+  try { quality = localStorage.getItem(QKEY); } catch (e) {}
+  if (quality !== 'smooth' && quality !== 'sharp') quality = installed ? 'smooth' : 'sharp';
+  var SHARP;
+  function setQuality(q) {
+    quality = q; try { localStorage.setItem(QKEY, q); } catch (e) {}
+    SHARP = q === 'smooth' ? 1 : Math.max(1, Math.min(2, DPR));
+    [].forEach.call($('quality').children, function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-q') === q)); });
+  }
+  setQuality(quality);
+  $('quality').addEventListener('click', function (e) { var q = e.target.getAttribute && e.target.getAttribute('data-q'); if (q) setQuality(q); });
   function area() {
     var g = $('game'), cs = getComputedStyle(g);
     return { w: g.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),

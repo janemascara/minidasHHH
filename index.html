@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>Mini Dash Player</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Mini Dash">
+<meta name="theme-color" content="#0b0d1a">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bungee&display=swap">
+<style>
+  /* One dark arcade screen: a start card (import + controls), then the game
+     full screen in landscape. Deliberately single-theme, colors set explicitly. */
+  :root {
+    --night: #0b0d1a;
+    --panel: #161a33;
+    --ink: #eef0ff;
+    --dim: #a3a9cf;
+    --cyan: #3ee6ff;
+    --line: rgba(238,240,255,.16);
+    --warn: #ffb547;
+    --display: "Bungee", "Arial Black", Impact, sans-serif;
+    --body: -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--night); color: var(--ink); font: 16px/1.6 var(--body); overflow: hidden;
+    overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+
+  /* ---------- start card ---------- */
+  #menu { height: 100%; overflow-y: auto; display: grid; place-items: center;
+    padding-block: 20px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    background: radial-gradient(120% 70% at 50% 120%, rgba(62,230,255,.16), transparent 60%), var(--night); }
+  .card { width: 100%; max-width: 460px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+    padding: 26px 22px 22px; display: grid; gap: 16px; }
+  h1 { margin: 0; font: 400 clamp(34px, 9vw, 44px)/1 var(--display); letter-spacing: .02em; text-shadow: 3px 3px 0 rgba(62,230,255,.35); }
+  .btn { appearance: none; display: flex; align-items: center; justify-content: center; width: 100%; min-height: 54px;
+    padding: 12px 18px; border-radius: 14px; border: 0; font: 700 18px/1.2 var(--body); cursor: pointer; }
+  .btn.primary { background: var(--cyan); color: #04121a; }
+  .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); min-height: 46px; font-size: 16px; }
+  .btn:focus-visible { outline: 3px solid var(--cyan); outline-offset: 3px; }
+  .btn[disabled] { opacity: .5; }
+  h2 { margin: 4px 0 0; font: 700 15px/1.3 var(--body); color: var(--cyan); letter-spacing: .04em; }
+  ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 15px; color: var(--dim); }
+  li { display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: start; }
+  li > span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: rgba(238,240,255,.1);
+    color: var(--ink); font: 700 13px/1 var(--body); }
+  li b { color: var(--ink); font-weight: 700; }
+  #status { margin: 0; font-size: 14px; color: var(--warn); }
+  #status:empty { display: none; }
+  #fileInput { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+  /* ---------- game ---------- */
+  #game { position: fixed; inset: 0; background: #000; display: none; place-items: center; touch-action: none;
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+  body.playing #game { display: grid; }
+  body.playing #menu { display: none; }
+  #box { position: relative; touch-action: none; overflow: hidden; }
+  /* the game is laid out at the phone's real pixel size and shrunk back down, so it draws sharp */
+  #stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  #stage > * { width: 100%; height: 100%; display: block; }
+  #loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); font-size: 16px; pointer-events: none; }
+
+  #rotate { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; text-align: center; background: var(--night);
+    padding-block: 24px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    font-size: 20px; font-weight: 700; }
+  body.needRotate #rotate { display: grid; }
+  #rotate .phone { width: 46px; height: 76px; border: 3px solid var(--ink); border-radius: 9px; margin: 0 auto 18px; animation: turn 2s ease-in-out infinite; }
+  @keyframes turn { 0%,25% { transform: rotate(0) } 60%,100% { transform: rotate(-90deg) } }
+  @media (prefers-reduced-motion: reduce) { #rotate .phone { animation: none; transform: rotate(-90deg); } }
+</style>
+
+<main id="menu">
+  <div class="card">
+    <h1>Mini Dash</h1>
+    <button id="playSaved" class="btn primary" hidden>&#9654;&nbsp;开始游戏</button>
+    <button id="choose" class="btn primary">选择游戏文件</button>
+    <p id="status" role="status"></p>
+
+    <h2>导入游戏</h2>
+    <ol>
+      <li><span>1</span><div>把收到的 <b>MiniDash.swf</b> 保存到 <b>“文件”</b> App。</div></li>
+      <li><span>2</span><div>点 <b>选择游戏文件</b>，选中它。只需要选一次，以后会自动记住。</div></li>
+    </ol>
+
+    <h2>操作方法</h2>
+    <ol>
+      <li><span>&#8635;</span><div>把手机<b>横过来</b>玩。</div></li>
+      <li><span>&#9664;</span><div>游戏左下角的 <b>&#9664; &#9654;</b>：左右移动。</div></li>
+      <li><span>&#9650;</span><div>点屏幕<b>其他任何地方</b>：跳跃。</div></li>
+      <li><span>&#9733;</span><div>用英雄时，点游戏里的<b>圆形按钮</b>：放特技。</div></li>
+    </ol>
+    <input id="fileInput" type="file">
+  </div>
+</main>
+
+<section id="game" aria-label="Mini Dash">
+  <div id="box">
+    <div id="loading">加载中，请稍等&hellip;</div>
+    <div id="stage"></div>
+  </div>
+</section>
+
+<div id="rotate"><div><div class="phone"></div>请把手机横过来</div></div>
+
+<script src="ruffle/ruffle.js"></script>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  function say(t) { $('status').textContent = t || ''; }
+
+  // ---------- remember the game file on this device ----------
+  var DB = 'minidash', STORE = 'files', KEY = 'game';
+  function idb() {
+    return new Promise(function (res, rej) {
+      try {
+        var r = indexedDB.open(DB, 1);
+        r.onupgradeneeded = function () { r.result.createObjectStore(STORE); };
+        r.onsuccess = function () { res(r.result); };
+        r.onerror = function () { rej(r.error); };
+      } catch (e) { rej(e); }
+    });
+  }
+  function saveGame(rec) {
+    return idb().then(function (db) { return new Promise(function (res, rej) {
+      var tx = db.transaction(STORE, 'readwrite'); tx.objectStore(STORE).put(rec, KEY);
+      tx.oncomplete = res; tx.onerror = function () { rej(tx.error); };
+    }); }).catch(function () {});
+  }
+  function loadSaved() {
+    return idb().then(function (db) { return new Promise(function (res) {
+      try {
+        var g = db.transaction(STORE).objectStore(STORE).get(KEY);
+        g.onsuccess = function () { res(g.result || null); }; g.onerror = function () { res(null); };
+      } catch (e) { res(null); }
+    }); }).catch(function () { return null; });
+  }
+  var saved = null;
+  function showSaved(rec) {
+    saved = rec;
+    $('playSaved').hidden = !rec;
+    $('choose').className = rec ? 'btn ghost' : 'btn primary';
+    $('choose').textContent = rec ? '更换游戏文件' : '选择游戏文件';
+  }
+  loadSaved().then(showSaved);
+
+  function isSwf(buf) {
+    var b = new Uint8Array(buf, 0, 3), s = String.fromCharCode(b[0], b[1], b[2]);
+    return s === 'FWS' || s === 'CWS' || s === 'ZWS';
+  }
+  $('choose').addEventListener('click', function () { $('fileInput').value = ''; $('fileInput').click(); });
+  $('fileInput').addEventListener('change', function () {
+    var f = this.files && this.files[0]; if (!f) return;
+    say(''); $('choose').disabled = true;
+    f.arrayBuffer().then(function (buf) {
+      $('choose').disabled = false;
+      if (buf.byteLength < 8 || !isSwf(buf)) { say('这不是游戏文件，请选择 MiniDash.swf。'); return; }
+      var rec = { name: f.name, data: buf };
+      saveGame(rec); showSaved(rec);
+      Sound.unlock(); start(rec);
+    }).catch(function () { $('choose').disabled = false; say('读取失败。如果文件在 iCloud 里，请先在“文件”App 里打开一次，再重试。'); });
+  });
+  $('playSaved').addEventListener('click', function () { Sound.unlock(); if (saved) start(saved); });
+
+  // ---------- sound ----------
+  // The game file reports its sound events with fscommand; its sounds ride
+  // along inside the same file (AAC), so this page holds none of the game.
+  var Sound = (function () {
+    var ctx = null, master = null, sfxBus = null, musicBus = null;
+    var raw = {}, bufs = {}, pending = {};
+    var sfxBySlot = {}, streamById = {}, loops = {}, live = [];
+    var music = { id: null, src: null };
+    var soundOn = true, musicOn = true, paused = false, sfxVol = 1, musicVol = 0.8;
+    function norm(n) {
+      n = String(n == null ? '' : n); var z = n.indexOf('\u0000'); if (z >= 0) n = n.slice(0, z);
+      return n.split(/[\\\/]/).pop().toLowerCase().replace(/\.(ogg|wav|mp3|m4a)$/, '').trim();
+    }
+    function vol(v) { v = +v || 0; return v <= 0 ? 0 : v <= 1 ? v : v <= 100 ? v / 100 : Math.min(1, v / 255); }
+    function ensure() {
+      try {
+        if (!ctx) {
+          var C = window.AudioContext || window.webkitAudioContext; if (!C) return null;
+          ctx = new C();
+          master = ctx.createGain(); master.connect(ctx.destination);
+          sfxBus = ctx.createGain(); sfxBus.connect(master);
+          musicBus = ctx.createGain(); musicBus.connect(master);
+          gains(); decodeAll();
+        }
+        if (ctx.state !== 'running' && !paused) ctx.resume().catch(function () {});
+      } catch (e) {}
+      return ctx;
+    }
+    function gains() { if (!ctx) return; sfxBus.gain.value = soundOn ? sfxVol : 0; musicBus.gain.value = musicOn ? musicVol : 0; }
+    function decode(name, cb) {
+      if (bufs[name]) { cb && cb(bufs[name]); return; }
+      if (!ctx || !raw[name]) return;
+      if (pending[name]) { cb && pending[name].push(cb); return; }
+      pending[name] = cb ? [cb] : [];
+      var done = function (b) { bufs[name] = b; var q = pending[name] || []; delete pending[name]; q.forEach(function (f) { f(b); }); };
+      var fail = function () { delete pending[name]; };
+      try { var r = ctx.decodeAudioData(raw[name].slice(0), done, fail); if (r && r.then) r.then(function () {}, function () {}); }
+      catch (e) { fail(); }
+    }
+    function decodeAll() { if (ctx) Object.keys(raw).forEach(function (n) { decode(n); }); }
+    function inflate(u8) {
+      if (typeof DecompressionStream === 'undefined') return Promise.reject(new Error('inflate'));
+      return new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('deflate'))).arrayBuffer()
+        .then(function (ab) { return new Uint8Array(ab); });
+    }
+    function findPack(u8) {
+      for (var i = u8.length - 8; i >= 0; i--) {
+        if (u8[i] === 77 && u8[i + 1] === 68 && u8[i + 2] === 65 && u8[i + 3] === 85 &&
+            u8[i + 4] === 68 && u8[i + 5] === 73 && u8[i + 6] === 79 && u8[i + 7] === 49) return i;   // "MDAUDIO1"
+      }
+      return -1;
+    }
+    function loadPack(buf) {
+      raw = {}; bufs = {};
+      var u8 = new Uint8Array(buf), sig = String.fromCharCode(u8[0], u8[1], u8[2]);
+      var body = sig === 'FWS' ? Promise.resolve(u8.subarray(8)) : sig === 'CWS' ? inflate(u8.subarray(8)) : Promise.resolve(new Uint8Array(0));
+      return body.then(function (b) {
+        var at = findPack(b); if (at < 0) return false;
+        var n = new DataView(b.buffer, b.byteOffset + at + 8, 4).getUint32(0, true);
+        var idx = JSON.parse(new TextDecoder().decode(b.subarray(at + 12, at + 12 + n))), base = at + 12 + n;
+        Object.keys(idx).forEach(function (k) { var o = idx[k]; raw[k] = b.slice(base + o[0], base + o[0] + o[1]).buffer; });
+        decodeAll(); return true;
+      }).catch(function () { return false; });
+    }
+    function play(name, loop, bus, onStart) {
+      if (!ctx || !name) return;
+      decode(name, function (b) {
+        if (!ctx) return;
+        var src = ctx.createBufferSource(); src.buffer = b; src.loop = !!loop; src.connect(bus);
+        try { src.start(); } catch (e) { return; }
+        onStart && onStart(src);
+      });
+    }
+    function stopSrc(s) { try { s.stop(); } catch (e) {} try { s.disconnect(); } catch (e) {} }
+    function stopSlot(slot) { (loops[slot] || []).forEach(stopSrc); delete loops[slot]; }
+    function stopAllSfx() { Object.keys(loops).forEach(stopSlot); live.forEach(stopSrc); live = []; }
+    function stopMusic() { if (music.src) stopSrc(music.src); music.src = null; }
+    function startMusic() {
+      stopMusic(); if (music.id == null || !musicOn || !ctx) return;
+      var id = music.id;
+      play(streamById[id], true, musicBus, function (src) {
+        if (music.id !== id || music.src) { stopSrc(src); return; }
+        music.src = src;
+      });
+    }
+    var H = {
+      __mdLoadSfx: function (a) { var i = a.lastIndexOf(','); sfxBySlot[+a.slice(i + 1)] = norm(a.slice(0, i)); },
+      __mdPlaySfx: function (a) {
+        var p = a.split(','), slot = +p[0], loop = p[1] === '1';
+        if (!soundOn || !ensure()) return;
+        play(sfxBySlot[slot], loop, sfxBus, function (src) {
+          if (loop) (loops[slot] = loops[slot] || []).push(src);
+          else {
+            live.push(src); if (live.length > 24) stopSrc(live.shift());
+            src.onended = function () { var k = live.indexOf(src); if (k >= 0) live.splice(k, 1); };
+          }
+        });
+      },
+      __mdStopSfx: function (a) { stopSlot(+a.split(',')[0]); },
+      __mdStopAll: function () { stopAllSfx(); },
+      __mdSoundOn: function (a) { soundOn = a !== '0'; if (!soundOn) stopAllSfx(); gains(); },
+      __mdSfxVol: function (a) { sfxVol = vol(a); gains(); },
+      __mdLoadStream: function (a) { var i = a.lastIndexOf(','); streamById[+a.slice(i + 1)] = norm(a.slice(0, i)); },
+      __mdPlayStream: function (a) {
+        var id = +a.split(',')[0];
+        if (music.id === id && music.src) return;
+        music.id = id; ensure(); startMusic();
+      },
+      __mdStopStream: function (a) { var id = +a.split(',')[0]; if (music.id === id) { stopMusic(); music.id = null; } },
+      __mdMusicOn: function (a) { musicOn = a !== '0'; gains(); if (!musicOn) stopMusic(); else if (music.id != null && !music.src) startMusic(); },
+      __mdPaused: function (a) { paused = a !== '0'; if (ctx) { try { paused ? ctx.suspend() : ctx.resume(); } catch (e) {} } },
+      __mdMusicVol: function (a) { musicVol = vol(a); gains(); }
+    };
+    return {
+      loadPack: loadPack,
+      unlock: function () { ensure(); if (music.id != null && !music.src && musicOn) startMusic(); },
+      handle: function (cmd, args) { var h = H[cmd]; if (!h) return false; try { h(args); } catch (e) {} return true; },
+      reset: function () { stopAllSfx(); stopMusic(); music.id = null; sfxBySlot = {}; streamById = {}; soundOn = musicOn = true; paused = false; gains(); }
+    };
+  })();
+  ['pointerdown', 'touchend', 'keydown'].forEach(function (t) { window.addEventListener(t, function () { Sound.unlock(); }, true); });
+
+  // ---------- full-screen game box ----------
+  // The game sizes its own layout to this box's shape when it starts, so the
+  // shape is chosen once (landscape) and kept afterwards.
+  var MIN_R = 1.3, MAX_R = 2.4, shape = null;
+  var SHARP = Math.max(1, Math.min(3, window.devicePixelRatio || 1));   // real pixels per CSS pixel
+  function area() {
+    var g = $('game'), cs = getComputedStyle(g);
+    return { w: g.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+             h: g.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) };
+  }
+  function fit() {
+    if (!document.body.classList.contains('playing')) return;
+    var A = area(); if (A.w <= 0 || A.h <= 0) return;
+    var r = shape || Math.min(MAX_R, Math.max(MIN_R, A.w / A.h));
+    var w = A.w, h = A.w / r;
+    if (h > A.h) { h = A.h; w = A.h * r; }
+    w = Math.floor(w); h = Math.floor(h);
+    $('box').style.width = w + 'px'; $('box').style.height = h + 'px';
+    var st = $('stage').style;
+    st.width = Math.round(w * SHARP) + 'px'; st.height = Math.round(h * SHARP) + 'px';
+    st.transform = 'scale(' + (1 / SHARP) + ')';
+  }
+  function portrait() { return window.innerHeight > window.innerWidth; }
+  window.addEventListener('resize', function () { fit(); checkRotate(); });
+  window.addEventListener('orientationchange', function () { setTimeout(function () { fit(); checkRotate(); }, 250); });
+
+  // ---------- the player ----------
+  var player = null, pendingRec = null;
+  function checkRotate() {
+    var need = document.body.classList.contains('playing') && portrait();
+    document.body.classList.toggle('needRotate', need);
+    if (!need && pendingRec) { var r = pendingRec; pendingRec = null; setTimeout(function () { launch(r); }, 300); }
+  }
+  function start(rec) {
+    if (!window.RufflePlayer) { say('游戏播放器没有加载成功，请检查网络后刷新页面。'); return; }
+    document.body.classList.add('playing');
+    if (portrait()) { pendingRec = rec; checkRotate(); return; }
+    launch(rec);
+  }
+  function launch(rec) {
+    shape = null; fit();
+    var A = $('box').getBoundingClientRect(); shape = A.width / A.height;
+    $('loading').style.display = 'grid'; $('stage').innerHTML = '';
+    Sound.reset(); ctl.reset();
+    // Ruffle sizes the game's stage in CSS pixels; with the stage enlarged above and the
+    // pixel ratio reported as 1, the game's own drawing surface gets one pixel per screen pixel.
+    try { Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: function () { return 1; } }); } catch (e) {}
+    window.RufflePlayer.config = {
+      autoplay: 'on', unmuteOverlay: 'hidden', splashScreen: false, letterbox: 'off', backgroundColor: '#000000',
+      contextMenu: 'off', allowScriptAccess: true, openUrlMode: 'deny', warnOnUnsupportedContent: false,
+      showSwfDownload: false, quality: 'high', logLevel: 'error', maxExecutionDuration: 120
+    };
+    try { player = window.RufflePlayer.newest().createPlayer(); }
+    catch (e) { fail(); return; }
+    $('stage').appendChild(player);
+    player.onFSCommand = function (cmd, args) { args = String(args == null ? '' : args); return ctl.handle(cmd, args) || Sound.handle(cmd, args); };
+    var ready = function () { $('loading').style.display = 'none'; };
+    player.addEventListener('loadedmetadata', ready);
+    Sound.loadPack(rec.data);
+    var api = player.ruffle ? player.ruffle() : player;
+    Promise.resolve(api.load({ data: rec.data.slice(0), swfFileName: 'MiniDash.swf' })).then(ready).catch(fail);
+  }
+  function fail() {
+    try { if (player && player.remove) player.remove(); } catch (e) {}
+    player = null; $('stage').innerHTML = '';
+    document.body.classList.remove('playing', 'needRotate');
+    say('游戏没有启动成功，请刷新页面再试一次。');
+  }
+
+  // Ruffle only reads keys while its own element has focus.
+  // Cheap when the game already has focus (the common case on every press).
+  var focusTarget = null;
+  function focusGame() {
+    if (!player || document.activeElement === player) return;
+    try {
+      if (!focusTarget || !focusTarget.isConnected) {
+        focusTarget = null;
+        var sr = player.shadowRoot;
+        if (sr) { var all = sr.querySelectorAll('[tabindex]'); if (all.length) focusTarget = all[0]; }
+      }
+      (focusTarget || player).focus({ preventScroll: true });
+    } catch (e) {}
+  }
+
+  // ---------- touch controls (only while a level is being played) ----------
+  // The game draws its own arrow pod and special button; this maps touches
+  // on them (and everywhere else = jump) to keys, with any number of fingers.
+  var ctl = (function () {
+    var K = { L: ['ArrowLeft', 'ArrowLeft', 37], R: ['ArrowRight', 'ArrowRight', 39], J: [' ', 'Space', 32], S: ['ArrowDown', 'ArrowDown', 40] };
+    var geo = null, inQuest = false, paused = false, ended = false;
+    var held = {}, ptrs = {};
+    function key(k, type) {
+      window.dispatchEvent(new KeyboardEvent(type, { key: K[k][0], code: K[k][1], keyCode: K[k][2], which: K[k][2], bubbles: true, cancelable: true }));
+    }
+    function press(k) { focusGame(); held[k] = (held[k] || 0) + 1; if (held[k] === 1) key(k, 'keydown'); }
+    function lift(k) { if (!held[k]) return; held[k]--; if (!held[k]) key(k, 'keyup'); }
+    function releaseAll() { Object.keys(ptrs).forEach(function (id) { var p = ptrs[id]; if (p.k) lift(p.k); }); ptrs = {}; }
+    function active() { return inQuest && !paused && !ended && geo; }
+    function logical(e) {
+      var r = $('box').getBoundingClientRect();
+      return { x: (e.clientX - r.left) * geo.MAXX / r.width, y: (e.clientY - r.top) * geo.MAXY / r.height };
+    }
+    function zone(p) {
+      var g = geo, wr = g.wr > 0 ? g.wr : 60;
+      if (p.x > g.MAXX - 58 && p.y < 58) return null;                                   // the game's pause button
+      if (g.special) {
+        var br = (g.br > 0 ? g.br : 40) * 1.35;
+        if (Math.pow(p.x - (g.MAXX - 160), 2) + Math.pow(p.y - g.ay, 2) < br * br) return 'S';
+      }
+      var near = Math.pow(p.x - g.cx, 2) + Math.pow(p.y - g.cy, 2) < Math.pow(wr * 1.6, 2);
+      var corner = p.x < g.cx + wr * 1.3 && p.y > g.cy - wr * 1.4;                       // generous bottom-left area
+      if (near || corner) return p.x < g.cx ? 'L' : 'R';
+      return 'J';
+    }
+    var box = $('box');
+    box.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'mouse' || !active()) return;                                // menus, pause, results: normal taps
+      var z = zone(logical(e)); if (!z) return;                                          // in-game buttons: normal taps
+      e.preventDefault(); e.stopPropagation();
+      try { box.setPointerCapture(e.pointerId); } catch (_) {}
+      ptrs[e.pointerId] = { k: z, move: z === 'L' || z === 'R' };
+      press(z);
+    }, true);
+    box.addEventListener('pointermove', function (e) {
+      var p = ptrs[e.pointerId]; if (!p) return;
+      e.preventDefault(); e.stopPropagation();
+      if (p.move && geo) {
+        var d = logical(e).x < geo.cx ? 'L' : 'R';
+        if (d !== p.k) { lift(p.k); p.k = d; press(d); }
+      }
+    }, true);
+    function up(e) {
+      var p = ptrs[e.pointerId]; if (!p) return;
+      e.preventDefault(); e.stopPropagation();
+      delete ptrs[e.pointerId]; lift(p.k);
+    }
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(function (t) { box.addEventListener(t, up, true); });
+    ['touchstart', 'touchmove', 'touchend'].forEach(function (t) {
+      box.addEventListener(t, function (e) { if (Object.keys(ptrs).length) e.preventDefault(); }, { passive: false, capture: true });
+    });
+    document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
+    window.addEventListener('blur', releaseAll);
+
+    var H = {
+      __mdQuest: function (a) {
+        var v = a.split(',').map(Number);
+        geo = { MAXX: v[0] || 480, MAXY: v[1] || 320, cx: v[2], cy: v[3], wr: v[4], br: v[5], ay: v[7], special: v[6] >= 1 && v[6] <= 5 };
+        inQuest = true; paused = false; ended = false; focusGame();
+      },
+      __mdRespawn: function (a) { ended = false; paused = false; if (geo) geo.special = +a >= 1 && +a <= 5; },
+      __mdQuestEnd: function () { inQuest = false; releaseAll(); },
+      __mdPause: function (a) { var p = a === '1'; if (p && !paused) releaseAll(); paused = p; },
+      __mdLevelEnd: function () { ended = true; releaseAll(); }
+    };
+    return {
+      handle: function (cmd, args) { var h = H[cmd]; if (!h) return false; try { h(args); } catch (e) {} return true; },
+      reset: function () { releaseAll(); geo = null; inQuest = paused = ended = false; }
+    };
+  })();
+})();
+</script>
+
+</body>
+</html>

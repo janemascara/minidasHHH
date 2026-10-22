@@ -9,8 +9,9 @@ What it changes:
   (`emu.py` reproduces the game's loader byte for byte) and appends the bitmap and texture pixels after
   the image data; `spec_fast.py` makes the loaders copy those in, falling back to the original decoder
   when anything doesn't match. Every asset is stored uncompressed so the game never runs its own inflate.
-- **Drawing.** `spec_gl.py` stops the GLS3D layer re-uploading unchanged shader constants and matrices
-  on every draw call.
+- **Drawing.** The game's libGL copied every vertex one by one in AVM2 before each draw; `spec_gl.py`
+  uploads its three vertex arrays (position, colour, texcoord) straight into Stage3D buffers instead,
+  and stops GLS3D re-uploading unchanged shader constants, matrices and programs on every draw call.
 - **Sound pack.** Moved to a raw trailer after the SWF so the page reads it without inflating the file.
 
 `Patch.java` applies the AVM2 p-code snippets (built with `asm.py`) using FFDec's library.

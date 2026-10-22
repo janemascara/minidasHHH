@@ -106,6 +106,27 @@
 
 <div id="rotate"><div><div class="phone"></div>请把手机横过来</div></div>
 
+<script>
+// Audio must behave like a game's, not a music player's: set before any audio starts. The game's
+// sounds are played by this page; Ruffle's own audio output is unused, and left running it keeps
+// iOS showing the page in Now Playing, so any audio context that isn't ours stays suspended.
+(function () {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'ambient'; } catch (e) {}
+  ['AudioContext', 'webkitAudioContext'].forEach(function (n) {
+    var C = window[n]; if (!C) return;
+    var W = function (opts) {
+      var c = opts === undefined ? new C() : new C(opts);
+      if (!window.__mdOwnAudio) {
+        try { c.suspend(); } catch (e) {}
+        c.resume = function () { return Promise.resolve(); };
+      }
+      return c;
+    };
+    W.prototype = C.prototype;
+    window[n] = W;
+  });
+})();
+</script>
 <script src="ruffle/ruffle.js"></script>
 <script>
 (function () {
@@ -225,10 +246,7 @@
       try {
         if (!ctx) {
           var C = window.AudioContext || window.webkitAudioContext; if (!C) return null;
-          // iOS: sound like a game, not like music: no Now Playing controls, mixes with other audio,
-          // follows the silent switch
-          try { if (navigator.audioSession) navigator.audioSession.type = 'ambient'; } catch (e) {}
-          ctx = new C();
+          window.__mdOwnAudio = true; ctx = new C(); window.__mdOwnAudio = false;
           master = ctx.createGain(); master.connect(ctx.destination);
           sfxBus = ctx.createGain(); sfxBus.connect(master);
           musicBus = ctx.createGain(); musicBus.connect(master);

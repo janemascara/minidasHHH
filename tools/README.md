@@ -15,6 +15,9 @@ What it changes:
 - **No anti-aliasing.** `spec_misc.txt` makes the game ask for a back buffer without MSAA
   (`configureBackBuffer(w, h, 0, true)` instead of `2`). Ruffle draws each Stage3D draw call in its own
   render pass, so with MSAA every draw resolved the whole screen again; the game's sprites look the same.
+- **memset.** FlasCC's `Fmemset` zeroed memory 8 bytes per AVM2 loop iteration, which was a large share
+  of the work while menus and levels load. `spec_misc.txt` makes zero fills of 256 bytes or more write
+  a fresh (zeroed) `ByteArray` into `C_Run.ram` with one native `writeBytes` call.
 - **Sound pack.** Moved to a raw trailer after the SWF so the page reads it without inflating the file.
 
 `Patch.java` applies the AVM2 p-code snippets (built with `asm.py`) using FFDec's library.
@@ -25,4 +28,7 @@ What it changes:
 Stage3D draw calls are recorded and replayed in one render pass per target instead of one render pass
 and queue submission each, program constants go into a ring buffer with dynamic offsets, and render
 pipelines and bind groups are cached instead of rebuilt after every `setTextureAt`/`setVertexBufferAt`.
+`ruffle-avm2-fused-ops.patch` adds an optimizer pass that fuses the op sequences FlasCC code uses most
+(local + constant address arithmetic, loads and stores at `local + offset`, constant stores to locals)
+into single ops, so the interpreter runs fewer ops per frame.
 `build_ruffle.sh` rebuilds it.

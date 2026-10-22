@@ -215,7 +215,7 @@
     var raw = {}, bufs = {}, pending = {}, failed = {};
     var sfxBySlot = {}, streamById = {}, loops = {}, live = [];
     var music = { id: null, src: null };
-    var soundOn = true, musicOn = true, paused = false, sfxVol = 1, musicVol = 0.8;
+    var soundOn = true, musicOn = true, paused = false, hidden = false, sfxVol = 1, musicVol = 0.8;
     function norm(n) {
       n = String(n == null ? '' : n); var z = n.indexOf('\u0000'); if (z >= 0) n = n.slice(0, z);
       return n.split(/[\\\/]/).pop().toLowerCase().replace(/\.(ogg|wav|mp3|m4a)$/, '').trim();
@@ -225,15 +225,16 @@
       try {
         if (!ctx) {
           var C = window.AudioContext || window.webkitAudioContext; if (!C) return null;
-          // iOS: play like media, so the ringer/silent switch doesn't mute the game
-          try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+          // iOS: sound like a game, not like music: no Now Playing controls, mixes with other audio,
+          // follows the silent switch
+          try { if (navigator.audioSession) navigator.audioSession.type = 'ambient'; } catch (e) {}
           ctx = new C();
           master = ctx.createGain(); master.connect(ctx.destination);
           sfxBus = ctx.createGain(); sfxBus.connect(master);
           musicBus = ctx.createGain(); musicBus.connect(master);
           gains(); decodeAll();
         }
-        if (ctx.state !== 'running' && !paused) ctx.resume().catch(function () {});
+        if (ctx.state !== 'running' && !paused && !hidden) ctx.resume().catch(function () {});
       } catch (e) {}
       return ctx;
     }
@@ -334,7 +335,7 @@
       },
       __mdStopStream: function (a) { var id = +a.split(',')[0]; if (music.id === id) { stopMusic(); music.id = null; } },
       __mdMusicOn: function (a) { musicOn = a !== '0'; gains(); if (!musicOn) stopMusic(); else if (music.id != null && !music.src) startMusic(); },
-      __mdPaused: function (a) { paused = a !== '0'; if (ctx) { try { paused ? ctx.suspend() : ctx.resume(); } catch (e) {} } },
+      __mdPaused: function (a) { paused = a !== '0'; if (ctx && !hidden) { try { paused ? ctx.suspend() : ctx.resume(); } catch (e) {} } },
       __mdMusicVol: function (a) { musicVol = vol(a); gains(); }
     };
     return {
@@ -348,9 +349,17 @@
         if (music.id != null && !music.src && musicOn) startMusic();
       },
       handle: function (cmd, args) { var h = H[cmd]; if (!h) return false; try { h(args); } catch (e) {} return true; },
+      // silent while the page is in the background, like a game
+      background: function (isHidden) {
+        hidden = isHidden; if (!ctx) return;
+        try { if (hidden) ctx.suspend(); else if (!paused) ctx.resume(); } catch (e) {}
+      },
       reset: function () { stopAllSfx(); stopMusic(); music.id = null; sfxBySlot = {}; streamById = {}; soundOn = musicOn = true; paused = false; gains(); }
     };
   })();
+  document.addEventListener('visibilitychange', function () { Sound.background(document.hidden); });
+  window.addEventListener('pagehide', function () { Sound.background(true); });
+  window.addEventListener('pageshow', function () { Sound.background(document.hidden); });
   // only real user input can unlock audio; the keys synthesized for touch controls are skipped
   ['pointerdown', 'touchend', 'keydown'].forEach(function (t) { window.addEventListener(t, function (e) { if (e.isTrusted) Sound.unlock(); }, true); });
 

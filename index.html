@@ -56,7 +56,8 @@
   li b { color: var(--ink); font-weight: 700; }
   #status { margin: 0; font-size: 14px; color: var(--warn); }
   #status:empty { display: none; }
-  #fileInput { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  #bar { height: 8px; border-radius: 4px; background: rgba(238,240,255,.12); overflow: hidden; }
+  #bar > i { display: block; height: 100%; width: 0; background: var(--cyan); transition: width .2s; }
 
   /* ---------- game ---------- */
   #game { position: fixed; inset: 0; background: #000; display: none; place-items: center; touch-action: none;
@@ -81,15 +82,10 @@
 <main id="menu">
   <div class="card">
     <h1>Mini Dash</h1>
-    <button id="playSaved" class="btn primary" hidden>&#9654;&nbsp;开始游戏</button>
-    <button id="choose" class="btn primary">选择游戏文件</button>
+    <button id="play" class="btn primary" disabled>加载中&hellip;</button>
+    <div id="bar" hidden><i></i></div>
     <p id="status" role="status"></p>
-
-    <h2>导入游戏</h2>
-    <ol>
-      <li><span>1</span><div>把收到的 <b>MiniDash.swf</b> 保存到 <b>“文件”</b> App。</div></li>
-      <li><span>2</span><div>点 <b>选择游戏文件</b>，选中它。只需要选一次，以后会自动记住。</div></li>
-    </ol>
+    <button id="retry" class="btn ghost" hidden>重试</button>
 
     <h2>操作方法</h2>
     <ol>
@@ -98,7 +94,6 @@
       <li><span>&#9650;</span><div>点屏幕<b>其他任何地方</b>：跳跃。</div></li>
       <li><span>&#9733;</span><div>用英雄时，点游戏里的<b>圆形按钮</b>：放特技。</div></li>
     </ol>
-    <input id="fileInput" type="file">
   </div>
 </main>
 
@@ -117,8 +112,9 @@
   var $ = function (id) { return document.getElementById(id); };
   function say(t) { $('status').textContent = t || ''; }
 
-  // ---------- remember the game file on this device ----------
-  var DB = 'minidash', STORE = 'files', KEY = 'game';
+  // ---------- the game file: downloaded from this site, kept on the device ----------
+  var GAME_URL = 'MiniDash.swf';
+  var DB = 'minidash', STORE = 'files', KEY = 'bundled';
   function idb() {
     return new Promise(function (res, rej) {
       try {
@@ -143,32 +139,73 @@
       } catch (e) { res(null); }
     }); }).catch(function () { return null; });
   }
-  var saved = null;
-  function showSaved(rec) {
-    saved = rec;
-    $('playSaved').hidden = !rec;
-    $('choose').className = rec ? 'btn ghost' : 'btn primary';
-    $('choose').textContent = rec ? '更换游戏文件' : '选择游戏文件';
+  function forget(key) {
+    return idb().then(function (db) { var tx = db.transaction(STORE, 'readwrite'); tx.objectStore(STORE).delete(key); }).catch(function () {});
   }
-  loadSaved().then(showSaved);
+  forget('game');   // a file picked by hand in the old version of this page
 
   function isSwf(buf) {
     var b = new Uint8Array(buf, 0, 3), s = String.fromCharCode(b[0], b[1], b[2]);
     return s === 'FWS' || s === 'CWS' || s === 'ZWS';
   }
-  $('choose').addEventListener('click', function () { $('fileInput').value = ''; $('fileInput').click(); });
-  $('fileInput').addEventListener('change', function () {
-    var f = this.files && this.files[0]; if (!f) return;
-    say(''); $('choose').disabled = true;
-    f.arrayBuffer().then(function (buf) {
-      $('choose').disabled = false;
-      if (buf.byteLength < 8 || !isSwf(buf)) { say('这不是游戏文件，请选择 MiniDash.swf。'); return; }
-      var rec = { name: f.name, data: buf };
-      saveGame(rec); showSaved(rec);
-      Sound.unlock(); start(rec);
-    }).catch(function () { $('choose').disabled = false; say('读取失败。如果文件在 iCloud 里，请先在“文件”App 里打开一次，再重试。'); });
-  });
-  $('playSaved').addEventListener('click', function () { Sound.unlock(); if (saved) start(saved); });
+  var game = null;
+  function ready(rec) {
+    game = rec;
+    $('bar').hidden = true; $('retry').hidden = true; say('');
+    $('play').disabled = false; $('play').textContent = '▶ 开始游戏';
+  }
+  function progress(p) {
+    $('bar').hidden = false; $('bar').firstChild.style.width = Math.round(p * 100) + '%';
+    $('play').textContent = '下载游戏中 ' + Math.min(99, Math.round(p * 100)) + '%';
+  }
+  // Which version the site has, without downloading it: ETag (or date) plus size.
+  function remoteTag() {
+    return fetch(GAME_URL, { method: 'HEAD', cache: 'no-store' }).then(function (r) {
+      if (!r.ok) return null;
+      return (r.headers.get('etag') || r.headers.get('last-modified') || '') + '|' + (r.headers.get('content-length') || '');
+    }).catch(function () { return null; });
+  }
+  function download(tag) {
+    progress(0);
+    return fetch(GAME_URL, { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) throw new Error('http ' + r.status);
+      var total = +r.headers.get('content-length') || 0;
+      if (!r.body || !r.body.getReader) return r.arrayBuffer();
+      var reader = r.body.getReader(), parts = [], got = 0;
+      return (function pump() {
+        return reader.read().then(function (s) {
+          if (s.done) {
+            var out = new Uint8Array(got), at = 0;
+            parts.forEach(function (p) { out.set(p, at); at += p.length; });
+            return out.buffer;
+          }
+          parts.push(s.value); got += s.value.length;
+          if (total) progress(Math.min(1, got / total));
+          return pump();
+        });
+      })();
+    }).then(function (buf) {
+      if (buf.byteLength < 8 || !isSwf(buf)) throw new Error('not a swf');
+      var rec = { name: GAME_URL, data: buf, tag: tag };
+      saveGame(rec);
+      return rec;
+    });
+  }
+  function boot() {
+    $('retry').hidden = true; say('');
+    Promise.all([loadSaved(), remoteTag()]).then(function (r) {
+      var cached = r[0], tag = r[1];
+      if (cached && (!tag || cached.tag === tag)) { ready(cached); return; }   // up to date, or offline
+      if (!tag) throw new Error('offline');
+      return download(tag).then(ready, function (e) { if (cached) ready(cached); else throw e; });
+    }).catch(function () {
+      $('bar').hidden = true; $('play').textContent = '加载失败';
+      say('游戏下载失败，请检查网络后重试。'); $('retry').hidden = false;
+    });
+  }
+  boot();
+  $('retry').addEventListener('click', boot);
+  $('play').addEventListener('click', function () { Sound.unlock(); if (game) start(game); });
 
   // ---------- sound ----------
   // The game file reports its sound events with fscommand; its sounds ride
@@ -188,6 +225,8 @@
       try {
         if (!ctx) {
           var C = window.AudioContext || window.webkitAudioContext; if (!C) return null;
+          // iOS: play like media, so the ringer/silent switch doesn't mute the game
+          try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
           ctx = new C();
           master = ctx.createGain(); master.connect(ctx.destination);
           sfxBus = ctx.createGain(); sfxBus.connect(master);
@@ -201,12 +240,12 @@
     function gains() { if (!ctx) return; sfxBus.gain.value = soundOn ? sfxVol : 0; musicBus.gain.value = musicOn ? musicVol : 0; }
     function decode(name, cb) {
       if (bufs[name]) { cb && cb(bufs[name]); return; }
-      if (!ctx || !raw[name] || failed[name]) return;
+      if (!ctx || !raw[name] || failed[name] >= 3) return;
       if (pending[name]) { cb && pending[name].push(cb); return; }
       pending[name] = cb ? [cb] : [];
       var done = function (b) { bufs[name] = b; var q = pending[name] || []; delete pending[name]; q.forEach(function (f) { f(b); }); };
       // a sound that can't be decoded is not retried on every play
-      var fail = function () { delete pending[name]; failed[name] = true; };
+      var fail = function () { delete pending[name]; failed[name] = (failed[name] || 0) + 1; };
       try { var r = ctx.decodeAudioData(raw[name].slice(0), done, fail); if (r && r.then) r.then(function () {}, function () {}); }
       catch (e) { fail(); }
     }
@@ -303,7 +342,10 @@
       swfLength: swfLength,
       unlock: function () {
         if (ctx && ctx.state === 'running' && (music.id == null || music.src || !musicOn || pending[streamById[music.id]])) return;
-        ensure(); if (music.id != null && !music.src && musicOn) startMusic();
+        if (!ensure()) return;
+        // iOS only lets audio start from a tap that also plays something: a 1-sample silent buffer
+        try { var b = ctx.createBuffer(1, 1, 22050), s = ctx.createBufferSource(); s.buffer = b; s.connect(ctx.destination); s.start(0); } catch (e) {}
+        if (music.id != null && !music.src && musicOn) startMusic();
       },
       handle: function (cmd, args) { var h = H[cmd]; if (!h) return false; try { h(args); } catch (e) {} return true; },
       reset: function () { stopAllSfx(); stopMusic(); music.id = null; sfxBySlot = {}; streamById = {}; soundOn = musicOn = true; paused = false; gains(); }

@@ -175,7 +175,7 @@
   // along inside the same file (AAC), so this page holds none of the game.
   var Sound = (function () {
     var ctx = null, master = null, sfxBus = null, musicBus = null;
-    var raw = {}, bufs = {}, pending = {};
+    var raw = {}, bufs = {}, pending = {}, failed = {};
     var sfxBySlot = {}, streamById = {}, loops = {}, live = [];
     var music = { id: null, src: null };
     var soundOn = true, musicOn = true, paused = false, sfxVol = 1, musicVol = 0.8;
@@ -201,11 +201,12 @@
     function gains() { if (!ctx) return; sfxBus.gain.value = soundOn ? sfxVol : 0; musicBus.gain.value = musicOn ? musicVol : 0; }
     function decode(name, cb) {
       if (bufs[name]) { cb && cb(bufs[name]); return; }
-      if (!ctx || !raw[name]) return;
+      if (!ctx || !raw[name] || failed[name]) return;
       if (pending[name]) { cb && pending[name].push(cb); return; }
       pending[name] = cb ? [cb] : [];
       var done = function (b) { bufs[name] = b; var q = pending[name] || []; delete pending[name]; q.forEach(function (f) { f(b); }); };
-      var fail = function () { delete pending[name]; };
+      // a sound that can't be decoded is not retried on every play
+      var fail = function () { delete pending[name]; failed[name] = true; };
       try { var r = ctx.decodeAudioData(raw[name].slice(0), done, fail); if (r && r.then) r.then(function () {}, function () {}); }
       catch (e) { fail(); }
     }
@@ -222,12 +223,26 @@
       }
       return -1;
     }
+    // Newer game files carry the sound pack as a raw trailer after the compressed SWF:
+    // "MDAUDIO1..." pack, u32 pack length, "MDAUDTRL". Returns the pack's start, or -1.
+    function trailerPack(u8) {
+      var n = u8.length;
+      if (n < 32 || String.fromCharCode.apply(null, u8.subarray(n - 8)) !== 'MDAUDTRL') return -1;
+      var len = new DataView(u8.buffer, u8.byteOffset + n - 12, 4).getUint32(0, true);
+      return len + 12 <= n ? n - 12 - len : -1;
+    }
+    function swfLength(buf) {
+      var u8 = new Uint8Array(buf), at = trailerPack(u8);
+      return at < 0 ? u8.length : at;
+    }
     function loadPack(buf) {
-      raw = {}; bufs = {};
+      raw = {}; bufs = {}; failed = {};
       var u8 = new Uint8Array(buf), sig = String.fromCharCode(u8[0], u8[1], u8[2]);
-      var body = sig === 'FWS' ? Promise.resolve(u8.subarray(8)) : sig === 'CWS' ? inflate(u8.subarray(8)) : Promise.resolve(new Uint8Array(0));
+      var tail = trailerPack(u8);
+      var body = tail >= 0 ? Promise.resolve(u8.subarray(tail))
+        : sig === 'FWS' ? Promise.resolve(u8.subarray(8)) : sig === 'CWS' ? inflate(u8.subarray(8)) : Promise.resolve(new Uint8Array(0));
       return body.then(function (b) {
-        var at = findPack(b); if (at < 0) return false;
+        var at = tail >= 0 ? 0 : findPack(b); if (at < 0) return false;
         var n = new DataView(b.buffer, b.byteOffset + at + 8, 4).getUint32(0, true);
         var idx = JSON.parse(new TextDecoder().decode(b.subarray(at + 12, at + 12 + n))), base = at + 12 + n;
         Object.keys(idx).forEach(function (k) { var o = idx[k]; raw[k] = b.slice(base + o[0], base + o[0] + o[1]).buffer; });
@@ -285,18 +300,24 @@
     };
     return {
       loadPack: loadPack,
-      unlock: function () { ensure(); if (music.id != null && !music.src && musicOn) startMusic(); },
+      swfLength: swfLength,
+      unlock: function () {
+        if (ctx && ctx.state === 'running' && (music.id == null || music.src || !musicOn || pending[streamById[music.id]])) return;
+        ensure(); if (music.id != null && !music.src && musicOn) startMusic();
+      },
       handle: function (cmd, args) { var h = H[cmd]; if (!h) return false; try { h(args); } catch (e) {} return true; },
       reset: function () { stopAllSfx(); stopMusic(); music.id = null; sfxBySlot = {}; streamById = {}; soundOn = musicOn = true; paused = false; gains(); }
     };
   })();
-  ['pointerdown', 'touchend', 'keydown'].forEach(function (t) { window.addEventListener(t, function () { Sound.unlock(); }, true); });
+  // only real user input can unlock audio; the keys synthesized for touch controls are skipped
+  ['pointerdown', 'touchend', 'keydown'].forEach(function (t) { window.addEventListener(t, function (e) { if (e.isTrusted) Sound.unlock(); }, true); });
 
   // ---------- full-screen game box ----------
   // The game sizes its own layout to this box's shape when it starts, so the
   // shape is chosen once (landscape) and kept afterwards.
   var MIN_R = 1.3, MAX_R = 2.4, shape = null;
-  var SHARP = Math.max(1, Math.min(3, window.devicePixelRatio || 1));   // real pixels per CSS pixel
+  // real pixels per CSS pixel; capped at 2 so 3x phones don't render 2.25x the pixels for no visible gain
+  var SHARP = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
   function area() {
     var g = $('game'), cs = getComputedStyle(g);
     return { w: g.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
@@ -352,7 +373,7 @@
     player.addEventListener('loadedmetadata', ready);
     Sound.loadPack(rec.data);
     var api = player.ruffle ? player.ruffle() : player;
-    Promise.resolve(api.load({ data: rec.data.slice(0), swfFileName: 'MiniDash.swf' })).then(ready).catch(fail);
+    Promise.resolve(api.load({ data: rec.data.slice(0, Sound.swfLength(rec.data)), swfFileName: 'MiniDash.swf' })).then(ready).catch(fail);
   }
   function fail() {
     try { if (player && player.remove) player.remove(); } catch (e) {}

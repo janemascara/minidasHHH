@@ -4,14 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}[hidden]{display:none!important}</style>
-</head>
-<body>
 <title>Mini Dash Player</title>
 <meta name="claude:viewport-fit-sides" content="cover">
+<!-- added to the Home Screen it opens as a full-screen app, without Safari's bars -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Mini Dash">
 <meta name="theme-color" content="#0b0d1a">
+</head>
+<body>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bungee&display=swap">
@@ -54,6 +58,8 @@
   li > span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: rgba(238,240,255,.1);
     color: var(--ink); font: 700 13px/1 var(--body); }
   li b { color: var(--ink); font-weight: 700; }
+  .hint { margin: 0; font-size: 14px; color: var(--dim); }
+  .hint b { color: var(--ink); }
   #status { margin: 0; font-size: 14px; color: var(--warn); }
   #status:empty { display: none; }
   #bar { height: 8px; border-radius: 4px; background: rgba(238,240,255,.12); overflow: hidden; }
@@ -68,6 +74,10 @@
   /* the game is laid out at the phone's real pixel size and shrunk back down, so it draws sharp */
   #stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
   #stage > * { width: 100%; height: 100%; display: block; }
+  #fsBtn { position: absolute; z-index: 5; top: max(6px, env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%);
+    display: none; width: 40px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: rgba(0,0,0,.35); color: #fff;
+    font: 700 20px/32px var(--body); cursor: pointer; }
+  body.canFs:not(.isFs) #fsBtn { display: block; }
   #loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); font-size: 16px; pointer-events: none; }
 
   #rotate { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; text-align: center; background: var(--night);
@@ -86,6 +96,7 @@
     <div id="bar" hidden><i></i></div>
     <p id="status" role="status"></p>
     <button id="retry" class="btn ghost" hidden>重试</button>
+    <p id="fsHint" class="hint" hidden>想要全屏玩：点 Safari 的 <b>分享</b> 按钮 &rarr; <b>添加到主屏幕</b>，以后从主屏幕的 Mini Dash 图标打开。</p>
 
     <h2>操作方法</h2>
     <ol>
@@ -98,6 +109,7 @@
 </main>
 
 <section id="game" aria-label="Mini Dash">
+  <button id="fsBtn" aria-label="全屏" title="全屏">&#x26F6;</button>
   <div id="box">
     <div id="loading">加载中，请稍等&hellip;</div>
     <div id="stage"></div>
@@ -226,7 +238,39 @@
   }
   boot();
   $('retry').addEventListener('click', boot);
-  $('play').addEventListener('click', function () { Sound.unlock(); if (game) start(game); });
+  // ---------- full screen ----------
+  // Browsers that allow it go full screen on the Play tap; iPhone Safari doesn't, but the page
+  // installs as a Home Screen app that opens without Safari's bars (see the hint).
+  var root = document.documentElement;
+  var installed = navigator.standalone === true ||
+    (window.matchMedia && matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches);
+  var canFs = !installed && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+  function isFs() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+  function goFs() {
+    try {
+      var r = root.requestFullscreen ? root.requestFullscreen({ navigationUI: 'hide' }) : root.webkitRequestFullscreen();
+      if (r && r.then) r.then(function () {
+        try { screen.orientation.lock('landscape').catch(function () {}); } catch (e) {}
+      }, function () {});
+    } catch (e) {}
+  }
+  function fsChanged() { document.body.classList.toggle('isFs', isFs()); }
+  document.body.classList.toggle('canFs', canFs);
+  $('fsHint').hidden = installed || canFs || !/iPhone|iPod/.test(navigator.userAgent);
+  document.addEventListener('fullscreenchange', fsChanged);
+  document.addEventListener('webkitfullscreenchange', fsChanged);
+  $('fsBtn').addEventListener('click', goFs);
+
+  $('play').addEventListener('click', function () {
+    Sound.unlock(); if (!game) return;
+    if (!canFs || isFs()) { start(game); return; }
+    // let the page settle at its full-screen size first: the game picks its layout from it
+    var go = function () { document.removeEventListener('fullscreenchange', go); document.removeEventListener('webkitfullscreenchange', go);
+      if (go.done) return; go.done = true; setTimeout(function () { start(game); }, 150); };
+    document.addEventListener('fullscreenchange', go); document.addEventListener('webkitfullscreenchange', go);
+    setTimeout(go, 800);
+    goFs();
+  });
 
   // ---------- sound ----------
   // The game file reports its sound events with fscommand; its sounds ride

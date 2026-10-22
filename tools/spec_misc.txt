@@ -1,0 +1,14 @@
+=== func Console/context_created before:callpropvoid/configureBackBuffer
+#regs 0
+#stack 0
+pop
+pop
+pushbyte 0
+pushtrue
+=== func Console/stageResize before:callpropvoid/configureBackBuffer
+#regs 0
+#stack 0
+pop
+pop
+pushbyte 0
+pushtrue

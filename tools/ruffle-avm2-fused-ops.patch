@@ -1,0 +1,368 @@
+diff --git a/core/src/avm2/activation.rs b/core/src/avm2/activation.rs
+index ac58f9f6..a1c64c35 100644
+--- a/core/src/avm2/activation.rs
++++ b/core/src/avm2/activation.rs
+@@ -18,7 +18,7 @@ use crate::avm2::object::{
+     ArrayObject, ByteArrayObject, ClassObject, FunctionObject, NamespaceObject, ScriptObject,
+     XmlListObject,
+ };
+-use crate::avm2::op::{LookupSwitch, Op};
++use crate::avm2::op::{self, LookupSwitch, Op};
+ use crate::avm2::scope::{Scope, ScopeChain, search_scope_stack};
+ use crate::avm2::script::Script;
+ use crate::avm2::stack::StackFrame;
+@@ -808,6 +808,24 @@ impl<'a, 'gc> Activation<'a, 'gc> {
+                 Op::Li8 => self.op_li8(),
+                 Op::Li16 => self.op_li16(),
+                 Op::Li32 => self.op_li32(),
++                Op::GetLocalAddI { index, value } => self.op_get_local_add_i(*index, *value),
++                Op::SetLocalAddI { src, dst, value } => {
++                    self.op_set_local_add_i(*src, *dst, *value)
++                }
++                Op::LoadLocalOffset { index, value, kind } => {
++                    self.op_load_local_offset(*index, *value, *kind)
++                }
++                Op::StoreLocalOffset { index, value, kind } => {
++                    self.op_store_local_offset(*index, *value, *kind)
++                }
++                Op::SetLocalInt { index, value } => {
++                    self.set_local_register(*index, *value);
++                    Ok(())
++                }
++                Op::SetLocalDouble { index, value } => {
++                    self.set_local_register(*index, *value);
++                    Ok(())
++                }
+                 Op::Lf32 => self.op_lf32(),
+                 Op::Lf64 => self.op_lf64(),
+                 Op::Sxi1 => self.op_sxi1(),
+@@ -2931,6 +2949,127 @@ impl<'a, 'gc> Activation<'a, 'gc> {
+         Ok(())
+     }
+ 
++    /// The value of a local register plus a constant, as `AddI` computes it
++    #[inline(always)]
++    fn local_plus(&mut self, index: u32, value: i32) -> Result<i32, Error<'gc>> {
++        Ok(match self.local_register(index) {
++            Value::Integer(n) => n.wrapping_add(value),
++            v => v.coerce_to_i32(self)?.wrapping_add(value),
++        })
++    }
++
++    /// Implements `Op::GetLocalAddI`
++    fn op_get_local_add_i(&mut self, index: u32, value: i32) -> Result<(), Error<'gc>> {
++        let sum = self.local_plus(index, value)?;
++        self.push_stack(sum);
++        Ok(())
++    }
++
++    /// Implements `Op::SetLocalAddI`
++    fn op_set_local_add_i(&mut self, src: u32, dst: u32, value: i32) -> Result<(), Error<'gc>> {
++        let sum = self.local_plus(src, value)?;
++        self.set_local_register(dst, sum);
++        Ok(())
++    }
++
++    /// Implements `Op::LoadLocalOffset`, the same as the `Li*`/`Lf*` ops
++    fn op_load_local_offset(&mut self, index: u32, value: i32, kind: u8) -> Result<(), Error<'gc>> {
++        let address = self.local_plus(index, value)? as usize;
++        let dm = self.domain_memory().storage();
++        let len = dm.len();
++        match kind {
++            op::MEM_8 => {
++                if let Some(val) = dm.get(address) {
++                    self.push_stack(val);
++                    return Ok(());
++                }
++            }
++            op::MEM_16 => {
++                if address <= len - 2 {
++                    let val = dm.read_at(2, address).expect("Already performed bounds check");
++                    self.push_stack(u16::from_le_bytes(val.try_into().unwrap()));
++                    return Ok(());
++                }
++            }
++            op::MEM_I32 => {
++                if address <= len - 4 {
++                    let val = dm.read_at(4, address).expect("Already performed bounds check");
++                    self.push_stack(i32::from_le_bytes(val.try_into().unwrap()));
++                    return Ok(());
++                }
++            }
++            op::MEM_F32 => {
++                if address <= len - 4 {
++                    let val = dm.read_at(4, address).expect("Already performed bounds check");
++                    self.push_stack(f32::from_le_bytes(val.try_into().unwrap()));
++                    return Ok(());
++                }
++            }
++            _ => {
++                if address <= len - 8 {
++                    let val = dm.read_at(8, address).expect("Already performed bounds check");
++                    self.push_stack(f64::from_le_bytes(val.try_into().unwrap()));
++                    return Ok(());
++                }
++            }
++        }
++        drop(dm);
++        Err(make_error_1506(self))
++    }
++
++    /// Implements `Op::StoreLocalOffset`, the same as the `Si*`/`Sf*` ops
++    fn op_store_local_offset(&mut self, index: u32, value: i32, kind: u8) -> Result<(), Error<'gc>> {
++        let address = self.local_plus(index, value)? as usize;
++        let val = self.pop_stack();
++        match kind {
++            op::MEM_8 => {
++                let val = val.coerce_to_i32(self)? as i8;
++                let mut dm = self.domain_memory().storage_mut();
++                if address < dm.len() {
++                    dm.set_nongrowing(address, val as u8);
++                    return Ok(());
++                }
++            }
++            op::MEM_16 => {
++                let val = val.coerce_to_i32(self)? as i16;
++                let mut dm = self.domain_memory().storage_mut();
++                if address <= dm.len() - 2 {
++                    dm.write_at_nongrowing(&val.to_le_bytes(), address)
++                        .expect("Already performed bounds check");
++                    return Ok(());
++                }
++            }
++            op::MEM_I32 => {
++                let val = val.coerce_to_i32(self)?;
++                let mut dm = self.domain_memory().storage_mut();
++                if address <= dm.len() - 4 {
++                    dm.write_at_nongrowing(&val.to_le_bytes(), address)
++                        .expect("Already performed bounds check");
++                    return Ok(());
++                }
++            }
++            op::MEM_F32 => {
++                let val = val.coerce_to_number(self)? as f32;
++                let mut dm = self.domain_memory().storage_mut();
++                if address <= dm.len() - 4 {
++                    dm.write_at_nongrowing(&val.to_le_bytes(), address)
++                        .expect("Already performed bounds check");
++                    return Ok(());
++                }
++            }
++            _ => {
++                let val = val.coerce_to_number(self)?;
++                let mut dm = self.domain_memory().storage_mut();
++                if address <= dm.len() - 8 {
++                    dm.write_at_nongrowing(&val.to_le_bytes(), address)
++                        .expect("Already performed bounds check");
++                    return Ok(());
++                }
++            }
++        }
++        Err(make_error_1506(self))
++    }
++
+     /// Implements `Op::Sxi1`
+     fn op_sxi1(&mut self) -> Result<(), Error<'gc>> {
+         let val = self.pop_stack().coerce_to_i32(self)?;
+diff --git a/core/src/avm2/op.rs b/core/src/avm2/op.rs
+index c8c5f6cc..8fe9237f 100644
+--- a/core/src/avm2/op.rs
++++ b/core/src/avm2/op.rs
+@@ -347,8 +347,50 @@ pub enum Op<'gc> {
+     TypeOf,
+     Timestamp,
+     URShift,
++
++    // Fused ops, emitted by `optimizer::fuse` for sequences that are very common in
++    // FlasCC (Alchemy) code. `kind` is one of the `MEM_*` constants.
++    /// GetLocal + PushInt + AddI/SubtractI
++    GetLocalAddI {
++        index: u32,
++        value: i32,
++    },
++    /// GetLocal + PushInt + AddI/SubtractI + SetLocal
++    SetLocalAddI {
++        src: u32,
++        dst: u32,
++        value: i32,
++    },
++    /// GetLocal + PushInt + AddI/SubtractI + Li8/Li16/Li32/Lf32/Lf64
++    LoadLocalOffset {
++        index: u32,
++        value: i32,
++        kind: u8,
++    },
++    /// GetLocal + PushInt + AddI/SubtractI + Si8/Si16/Si32/Sf32/Sf64
++    StoreLocalOffset {
++        index: u32,
++        value: i32,
++        kind: u8,
++    },
++    /// PushInt + SetLocal
++    SetLocalInt {
++        index: u32,
++        value: i32,
++    },
++    /// PushDouble + SetLocal
++    SetLocalDouble {
++        index: u32,
++        value: f64,
++    },
+ }
+ 
++pub const MEM_8: u8 = 0;
++pub const MEM_16: u8 = 1;
++pub const MEM_I32: u8 = 2;
++pub const MEM_F32: u8 = 3;
++pub const MEM_F64: u8 = 4;
++
+ impl Op<'_> {
+     pub fn can_throw_error(&self) -> bool {
+         !matches!(
+diff --git a/core/src/avm2/optimizer.rs b/core/src/avm2/optimizer.rs
+index b1af9ea7..59345555 100644
+--- a/core/src/avm2/optimizer.rs
++++ b/core/src/avm2/optimizer.rs
+@@ -1,5 +1,6 @@
+ mod blocks;
+ mod dce;
++mod fuse;
+ mod nop_remover;
+ mod peephole;
+ mod type_aware;
+@@ -48,6 +49,10 @@ pub fn optimize<'gc>(
+ 
+     dce::eliminate_dead_code(code_slice, &jump_targets);
+ 
++    if method_exceptions.is_empty() {
++        fuse::fuse_ops(code_slice, &jump_targets);
++    }
++
+     nop_remover::remove_nops(code, method_exceptions);
+ 
+     Ok(())
+diff --git a/core/src/avm2/optimizer/fuse.rs b/core/src/avm2/optimizer/fuse.rs
+new file mode 100644
+index 00000000..59cbccf1
+--- /dev/null
++++ b/core/src/avm2/optimizer/fuse.rs
+@@ -0,0 +1,102 @@
++use crate::avm2::op::{MEM_8, MEM_16, MEM_F32, MEM_F64, MEM_I32, Op};
++
++use std::cell::Cell;
++use std::collections::HashSet;
++
++/// Fuses sequences of ops that are very common in FlasCC (Alchemy) code into
++/// single ops, so that the interpreter dispatches fewer ops and moves fewer
++/// values through the operand stack. Only ops that are not jump targets are
++/// fused into the op before them. Run after DCE and before removing nops; the
++/// fused op takes the place of the first op of the sequence and the rest
++/// become nops.
++pub fn fuse_ops<'gc>(ops: &[Cell<Op<'gc>>], jump_targets: &HashSet<usize>) {
++    let idx: Vec<usize> = (0..ops.len())
++        .filter(|&i| !ops[i].get().is_nop())
++        .collect();
++
++    let mut k = 0;
++    while k < idx.len() {
++        let get = |j: usize| idx.get(k + j).map(|&i| ops[i].get());
++        // Nothing after the first op of a sequence may be a jump target, including
++        // nops in between
++        let free = |n: usize| {
++            idx.get(k + n - 1)
++                .is_some_and(|&last| (idx[k] + 1..=last).all(|i| !jump_targets.contains(&i)))
++        };
++        let replace = |n: usize, op: Op<'gc>| {
++            ops[idx[k]].set(op);
++            for j in 1..n {
++                ops[idx[k + j]].set(Op::Nop);
++            }
++        };
++
++        match (get(0), get(1), get(2)) {
++            (
++                Some(Op::GetLocal { index }),
++                Some(Op::PushInt { value }),
++                Some(add @ (Op::AddI | Op::SubtractI)),
++            ) if free(3) => {
++                let value = if matches!(add, Op::SubtractI) {
++                    value.wrapping_neg()
++                } else {
++                    value
++                };
++                let mem = |kind| (kind, false);
++                let fourth = if free(4) {
++                    match get(3) {
++                        Some(Op::SetLocal { index: dst }) => Some(Op::SetLocalAddI {
++                            src: index,
++                            dst,
++                            value,
++                        }),
++                        Some(op) => {
++                            let m = match op {
++                                Op::Li8 => Some(mem(MEM_8)),
++                                Op::Li16 => Some(mem(MEM_16)),
++                                Op::Li32 => Some(mem(MEM_I32)),
++                                Op::Lf32 => Some(mem(MEM_F32)),
++                                Op::Lf64 => Some(mem(MEM_F64)),
++                                Op::Si8 => Some((MEM_8, true)),
++                                Op::Si16 => Some((MEM_16, true)),
++                                Op::Si32 => Some((MEM_I32, true)),
++                                Op::Sf32 => Some((MEM_F32, true)),
++                                Op::Sf64 => Some((MEM_F64, true)),
++                                _ => None,
++                            };
++                            m.map(|(kind, store)| {
++                                if store {
++                                    Op::StoreLocalOffset { index, value, kind }
++                                } else {
++                                    Op::LoadLocalOffset { index, value, kind }
++                                }
++                            })
++                        }
++                        None => None,
++                    }
++                } else {
++                    None
++                };
++                if let Some(op) = fourth {
++                    replace(4, op);
++                    k += 4;
++                } else {
++                    replace(3, Op::GetLocalAddI { index, value });
++                    k += 3;
++                }
++                continue;
++            }
++            (Some(Op::PushInt { value }), Some(Op::SetLocal { index }), _) if free(2) => {
++                replace(2, Op::SetLocalInt { index, value });
++                k += 2;
++                continue;
++            }
++            (Some(Op::PushDouble { value }), Some(Op::SetLocal { index }), _) if free(2) => {
++                replace(2, Op::SetLocalDouble { index, value });
++                k += 2;
++                continue;
++            }
++            _ => {}
++        }
++        k += 1;
++    }
++}
+diff --git a/core/src/avm2/optimizer/type_aware.rs b/core/src/avm2/optimizer/type_aware.rs
+index 026fb6a0..2fd5cca6 100644
+--- a/core/src/avm2/optimizer/type_aware.rs
++++ b/core/src/avm2/optimizer/type_aware.rs
+@@ -2032,6 +2032,12 @@ fn abstract_interpret_ops<'gc>(
+             | Op::Bkpt
+             | Op::BkptLine { .. }
+             | Op::Timestamp => {}
++            Op::GetLocalAddI { .. }
++            | Op::SetLocalAddI { .. }
++            | Op::LoadLocalOffset { .. }
++            | Op::StoreLocalOffset { .. }
++            | Op::SetLocalInt { .. }
++            | Op::SetLocalDouble { .. } => unreachable!("fused ops are created after this pass"),
+             Op::Si8 | Op::Si16 | Op::Si32 => {
+                 stack.pop(activation)?;
+                 stack.pop(activation)?;

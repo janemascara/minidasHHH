@@ -1,0 +1,36 @@
+=== func Console/context_created before:callpropvoid/configureBackBuffer
+#regs 0
+#stack 0
+pop
+pop
+pushbyte 0
+pushtrue
+=== func Console/stageResize before:callpropvoid/configureBackBuffer
+#regs 0
+#stack 0
+pop
+pop
+pushbyte 0
+pushtrue
+=== func Fmemset after:setlocal3
+#regs 0
+#stack 4
+getlocal2
+iftrue md_loop
+getlocal3
+pushshort 256
+iflt md_loop
+getlex QName(PackageNamespace("C_Run"),"ram")
+getlocal 4
+setproperty QName(PackageNamespace(""),"position")
+getlex QName(PackageNamespace("C_Run"),"ram")
+getlex QName(PackageNamespace("flash.utils"),"ByteArray")
+construct 0
+dup
+getlocal3
+setproperty QName(PackageNamespace(""),"length")
+pushbyte 0
+getlocal3
+callpropvoid QName(PackageNamespace(""),"writeBytes"), 3
+returnvoid
+md_loop:

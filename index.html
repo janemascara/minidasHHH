@@ -248,6 +248,26 @@
   }
   boot();
   $('retry').addEventListener('click', boot);
+
+  // ---------- player warm-up ----------
+  // Ruffle only downloads and compiles its ~14 MB WebAssembly core on the first load(), which
+  // used to be the Play tap, after the game had finished downloading. Loading an empty SWF into a
+  // hidden player right away does that work alongside the game download; Ruffle keeps the
+  // compiled core, so the real player on Play starts without the extra wait.
+  function warmPlayer() {
+    if (!window.RufflePlayer) return;
+    var swf = new Uint8Array([70, 87, 83, 10, 15, 0, 0, 0, 0, 0, 24, 1, 0, 0, 0]);   // "FWS", empty stage, End
+    var host = document.createElement('div'), p;
+    host.style.cssText = 'position:fixed;left:-10px;top:0;width:1px;height:1px;opacity:0;pointer-events:none;overflow:hidden';
+    host.setAttribute('aria-hidden', 'true');
+    try { p = window.RufflePlayer.newest().createPlayer(); } catch (e) { return; }
+    host.appendChild(p); document.body.appendChild(host);
+    var done = function () { try { p.remove(); } catch (e) {} host.remove(); };
+    var api = p.ruffle ? p.ruffle() : p;
+    Promise.resolve(api.load({ data: swf.buffer, autoplay: 'off', splashScreen: false, unmuteOverlay: 'hidden',
+      contextMenu: 'off', warnOnUnsupportedContent: false, showSwfDownload: false, logLevel: 'error' })).then(done, done);
+  }
+  warmPlayer();
   // ---------- full screen ----------
   // Browsers that allow it go full screen on the Play tap; iPhone Safari doesn't, but the page
   // installs as a Home Screen app that opens without Safari's bars (see the hint).
